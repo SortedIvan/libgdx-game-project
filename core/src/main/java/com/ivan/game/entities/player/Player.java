@@ -7,8 +7,9 @@ import com.badlogic.gdx.graphics.glutils.ShapeRenderer;
 import com.badlogic.gdx.graphics.glutils.ShapeRenderer.ShapeType;
 import com.badlogic.gdx.math.Vector2;
 import com.ivan.game.entities.Entity;
-import utils.PlayerUtility;
 
+import utils.PlayerUtility;
+import utils.Matrix2;
 
 public class Player extends Entity {
     private ShapeRenderer renderer;
@@ -16,14 +17,30 @@ public class Player extends Entity {
 
     private Vector2 position;
     private Vector2 facingDirection;
+    private Vector2 mouseIndicatorLeftNormal;
+    private Vector2 mouseIndicatorRightNormal;
+    private Vector2 mouseIndicatorLeftPos;
+    private Vector2 mouseIndicatorRightPos;
+    private Vector2 mouseIndicatorStartPos;
+    private boolean followMouseDir = true;
+
+    private final float indicatorLength = 10.f;
+    private final float indicatorSizeAwayFromPlayer = 50.f;
+
+    private int prevMousPosX = 0;
+    private int prevMousPosY = 0;
+
+    private int prevPlayerPosX = 0;
+    private int prevPlayerPosY = 0;
+
     private int health;
     private Color playerColor;
-    private int playerSpeed = 100;
-    private float acceleration = 0;
-    private float accelerateBy = 0.2f;
-    private float maxAcceleration = 2;
-
-    private final Vector2 playerSize = new Vector2(30, 30);
+    private int playerSpeed = 40;
+    private float acceleration = 1;
+    private float accelerateBy = 3.5f;
+    private float maxAcceleration = 10;
+    private float accelerationFraction = 0.2f;
+    private float playerSizeRadius = 30.f;
 
     @Override
     public void initialize(ShapeRenderer renderer, SpriteBatch batch) {
@@ -33,23 +50,30 @@ public class Player extends Entity {
         health = PlayerUtility.START_HEALTH;
         // offset so the player is perfectly centered initially
         position = new Vector2(
-            PlayerUtility.INITIAL_SPAWN_POSITION.x - playerSize.x / 2,
-            PlayerUtility.INITIAL_SPAWN_POSITION.y - playerSize.y / 2
+            PlayerUtility.INITIAL_SPAWN_POSITION.x - playerSizeRadius / 2,
+            PlayerUtility.INITIAL_SPAWN_POSITION.y - playerSizeRadius / 2
         );
         facingDirection = PlayerUtility.INITIAL_FACING_DIRECTION;
         playerColor = new Color(196, 180, 84, 100);
+
+        mouseIndicatorLeftNormal = new Vector2(-1, 0).rotateDeg(30);
+        mouseIndicatorRightNormal = new Vector2(1, 0).rotateDeg(-30);
+        mouseIndicatorLeftPos = new Vector2(0,0);
+        mouseIndicatorRightPos = new Vector2(0,0);
+        mouseIndicatorStartPos = new Vector2(0,0);
     }
 
     @Override
     public void update(float deltaTime) {
-        followMouse();
         var displacement = getInputForMovement(deltaTime);
         move(displacement);
+        followMouse();
     }
 
     @Override
     public void draw() {
         drawPlayer();
+        drawMouseIndicator();
     }
 
     @Override
@@ -59,8 +83,15 @@ public class Player extends Entity {
 
     @Override
     public void move(Vector2 displacement) {
+        prevPlayerPosX = (int)position.x;
+        prevPlayerPosY = (int)position.y;
+
         this.position = new Vector2(position.x + displacement.x,
             position.y + displacement.y);
+
+        this.mouseIndicatorStartPos = mouseIndicatorStartPos.add(displacement);
+        this.mouseIndicatorLeftPos = mouseIndicatorLeftPos.add(displacement);
+        this.mouseIndicatorRightPos = mouseIndicatorRightPos.add(displacement);
     }
 
     @Override
@@ -69,14 +100,59 @@ public class Player extends Entity {
     }
 
     private void drawPlayer() {
-        renderer.begin(ShapeType.Filled); //I'm using the Filled ShapeType, but remember you have three of them
-        renderer.rect(position.x, position.y, playerSize.x, playerSize.y,
-                      playerColor,playerColor,playerColor,playerColor);
+        renderer.begin(ShapeType.Filled);
+        renderer.setColor(playerColor);
+        renderer.circle(position.x, position.y, playerSizeRadius);
+        renderer.end();
+    }
+
+    private void drawMouseIndicator() {
+        renderer.begin(ShapeType.Line);
+        renderer.setColor(playerColor);
+        renderer.line(mouseIndicatorStartPos, mouseIndicatorLeftPos);
+        renderer.line(mouseIndicatorStartPos, mouseIndicatorRightPos);
         renderer.end();
     }
 
     private void followMouse() {
+        if (!followMouseDir) {
+            return;
+        }
 
+        int currMousePosX = Gdx.input.getX();
+        int currMousePosY = Gdx.graphics.getHeight() - Gdx.input.getY();
+
+        if (currMousePosX == prevMousPosX && currMousePosY == prevMousPosY) {
+            return; // no need to change anything
+        }
+
+        prevMousPosX = currMousePosX;
+        prevMousPosY = currMousePosY;
+
+        Vector2 mousePosVec = new Vector2(currMousePosX, currMousePosY);
+        Vector2 dirVecFromPlayerToMouse = mousePosVec.sub(position).nor();
+        Vector2 positionForIndicator = new Vector2(
+            dirVecFromPlayerToMouse.x * indicatorSizeAwayFromPlayer + position.x,
+            dirVecFromPlayerToMouse.y * indicatorSizeAwayFromPlayer + position.y
+        );
+
+        this.facingDirection = dirVecFromPlayerToMouse;
+        this.mouseIndicatorStartPos = positionForIndicator;
+
+        Matrix2 transformForIndicators = getTransformMatrixOfPositionIndicator(dirVecFromPlayerToMouse);
+        var leftIndicator = transformForIndicators.applyTransform(mouseIndicatorLeftNormal);
+        var rightIndicator = transformForIndicators.applyTransform(mouseIndicatorRightNormal);
+
+        mouseIndicatorLeftPos = new Vector2(mouseIndicatorStartPos).mulAdd(leftIndicator, indicatorLength);
+        mouseIndicatorRightPos = new Vector2(mouseIndicatorStartPos).mulAdd(rightIndicator, indicatorLength);
+
+    }
+
+    private Matrix2 getTransformMatrixOfPositionIndicator(Vector2 dir) {
+        return new Matrix2(
+            new Vector2(dir).rotateDeg(-90),
+            dir
+        );
     }
 
     private void accelerate() {
@@ -85,16 +161,21 @@ public class Player extends Entity {
             return;
         }
 
-        acceleration += accelerateBy;
+        acceleration = lerpAcceleration(acceleration);
+    }
+
+    private float lerpAcceleration(float acceleration) {
+        acceleration += (maxAcceleration - acceleration) * accelerationFraction;
+        return acceleration;
     }
 
     private void deAccelerate() {
-        if (acceleration - accelerateBy <= 1) {
+        if (acceleration <= 1) {
             acceleration = 1;
             return;
         }
 
-        acceleration -= accelerateBy;
+        acceleration += (1 - acceleration) * accelerationFraction;
     }
 
     private Vector2 getInputForMovement(float dt) {
